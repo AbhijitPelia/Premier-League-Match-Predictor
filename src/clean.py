@@ -11,6 +11,14 @@ from src.teams import canonical_name
 PROCESSED_DIR = ROOT / "data" / "processed"
 MATCHES_PATH = PROCESSED_DIR / "matches.csv"
 
+def load_matches() -> pd.DataFrame:
+    """Read the saved matches table back with the correct dtypes.
+
+    Season codes must stay strings: read_csv would otherwise turn "2627" into
+    the integer 2627, breaking any comparison against a season code.
+    """
+    return pd.read_csv(MATCHES_PATH, dtype={"season": str}, parse_dates=["date"])
+
 # Raw column -> clean column. Every season must have these, or we stop.
 REQUIRED = {
     "FTHG": "home_goals",
