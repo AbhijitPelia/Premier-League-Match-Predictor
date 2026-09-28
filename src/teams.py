@@ -25,12 +25,12 @@ TEAM_ALIASES: dict[str, list[str]] = {
     "leicester": ["Leicester"],
     "liverpool": ["Liverpool"],
     "luton": ["Luton"],
-    "man_city": ["Man City"],
-    "man_united": ["Man United"],
+    "man_city": ["Man City", "Manchester City"],
+    "man_united": ["Man United", "Manchester United"],
     "middlesbrough": ["Middlesbrough"],
-    "newcastle": ["Newcastle"],
+    "newcastle": ["Newcastle", "Newcastle United"],
     "norwich": ["Norwich"],
-    "nottingham_forest": ["Nott'm Forest"],
+    "nottingham_forest": ["Nott'm Forest", "Nottingham Forest"],
     "sheffield_united": ["Sheffield United"],
     "southampton": ["Southampton"],
     "stoke": ["Stoke"],
@@ -38,11 +38,10 @@ TEAM_ALIASES: dict[str, list[str]] = {
     "swansea": ["Swansea"],
     "tottenham": ["Tottenham"],
     "watford": ["Watford"],
-    "west_brom": ["West Brom"],
-    "west_ham": ["West Ham"],
-    "wolves": ["Wolves"],
+    "west_brom": ["West Brom", "West Bromwich Albion"],
+    "west_ham": ["West Ham", "West Ham United"],
+    "wolves": ["Wolves", "Wolverhampton Wanderers"],
 }
-
 
 def _build_lookup() -> dict[str, str]:
     """Flip TEAM_ALIASES into {alias: team_id}, refusing duplicate aliases."""
@@ -69,3 +68,7 @@ def canonical_name(name: str) -> str:
         raise KeyError(
             f"Unknown team name {name!r}. Add it to TEAM_ALIASES in src/teams.py."
         ) from None
+        
+def canonical_name_or_none(name: str) -> str | None:
+    """Return the canonical_name for any known spelling of a team name, or None if unknown."""
+    return _LOOKUP.get(name.strip())

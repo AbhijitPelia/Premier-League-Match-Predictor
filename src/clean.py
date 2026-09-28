@@ -10,14 +10,15 @@ from src.teams import canonical_name
 
 PROCESSED_DIR = ROOT / "data" / "processed"
 MATCHES_PATH = PROCESSED_DIR / "matches.csv"
+XG_PATH = PROCESSED_DIR / "xg.csv"
 
 def load_matches() -> pd.DataFrame:
-    """Read the saved matches table back with the correct dtypes.
-
-    Season codes must stay strings: read_csv would otherwise turn "2627" into
-    the integer 2627, breaking any comparison against a season code.
-    """
-    return pd.read_csv(MATCHES_PATH, dtype={"season": str}, parse_dates=["date"])
+    """Read the saved matches table back, with xG merged in if available."""
+    matches = pd.read_csv(MATCHES_PATH, dtype={"season": str}, parse_dates=["date"])
+    
+    if XG_PATH.exists():
+        matches = matches.merge(pd.read_csv(XG_PATH), on="match_id", how="left")
+    return matches
 
 # Raw column -> clean column. Every season must have these, or we stop.
 REQUIRED = {
