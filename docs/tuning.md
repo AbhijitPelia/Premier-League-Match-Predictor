@@ -2,10 +2,11 @@
 
 ## Conclusion
 
-xi and prior_sd are insensitive across the ranges tested and keep their
-defaults; the blend between goals and xG is the one parameter that produced a
-real, held-out improvement, and is now set to 0.5. Further gains must come from
-model structure rather than tuning.
+xi and prior_sd for the goals model are insensitive across the ranges tested
+and keep their defaults. Two changes produced real, held-out improvements: a
+0.5 blend between goals and xG, and heavy shrinkage on the corner ratings
+(prior_sd = 0.10). Further gains must come from model structure rather than
+tuning.
 
 ## Method
 
@@ -17,7 +18,7 @@ base-rate baseline.
 Sweeps were run on 2425 onward (810 matches) for speed, then the best candidate
 was confirmed on the full history from 1920 (2,710 matches), which includes
 seasons never used for tuning. That confirmation step is not optional: it
-killed the xi result below and validated the blend result.
+killed the xi result below and validated the blend and corner results.
 
 "Gap captured" throughout is how far the model closes the distance from the
 naive baseline to the closing line.
@@ -113,22 +114,66 @@ edge, so it is less likely to be fitted to this particular window.
 
 **blend = 0.5 adopted as the default.**
 
+## Sweep: corner prior_sd, corner xi = 0.0018
+
+Short window, 2425-2627, 810 matches. Baseline 0.6890; no market benchmark,
+since Football-Data.co.uk carries no corner odds.
+
+| prior_sd | O/U 10.5   |
+| -------- | ---------- |
+| 0.25     | 0.6879     |
+| 0.15     | 0.6865     |
+| 0.10     | **0.6855** |
+| 0.05     | 0.6858     |
+| 0.02     | 0.6873     |
+
+Motivated by the calibration table rather than a blind sweep: predictions
+spanned 0.27-0.63 while actual rates spanned only 0.33-0.57, so the model was
+over-confident and needed heavier shrinkage.
+
+At 0.02 all 810 predictions collapsed into one band — the degenerate end of the
+curve, where the model becomes a constant predictor and its log loss converges
+on the baseline.
+
+## Confirmation: corner prior_sd on held-out seasons — ACCEPTED
+
+Full history, 1920-2627, 2,710 matches. Baseline 0.6892.
+
+| prior_sd | O/U 10.5   |
+| -------- | ---------- |
+| 0.25     | 0.6878     |
+| 0.10     | **0.6861** |
+
+The gain roughly doubled on held-out data (0.0014 to 0.0031), and calibration
+gaps are now within 0.03 in every populated band.
+
+Corner ratings need roughly 3x the shrinkage of goal ratings (0.10 vs 0.35):
+team differences in corner rates are real but much smaller relative to the
+noise than differences in scoring.
+
+**corner prior_sd = 0.10 adopted.** Corner xi remains untuned at 0.0018.
+
 ## Baseline performance to beat
 
 Full history, 1920-2627, 2,710 matches, at the current defaults
-(xi = 0.0018, prior_sd = 0.35, blend = 0.5):
+(xi = 0.0018, prior_sd = 0.35, blend = 0.5, corner prior_sd = 0.10):
 
-| Market  | Model  | Market | Baseline | Gap captured |
-| ------- | ------ | ------ | -------- | ------------ |
-| 1X2     | 0.9831 | 0.9657 | 1.0699   | 83%          |
-| O/U 2.5 | 0.6773 | 0.6734 | 0.6882   | 74%          |
+| Market           | Model  | Market | Baseline | Gap captured |
+| ---------------- | ------ | ------ | -------- | ------------ |
+| 1X2              | 0.9831 | 0.9657 | 1.0699   | 83%          |
+| O/U 2.5 goals    | 0.6773 | 0.6734 | 0.6882   | 74%          |
+| O/U 10.5 corners | 0.6861 | —      | 0.6892   | n/a          |
+
+Corners have no gap-captured figure because there is no market column to
+measure against: Football-Data.co.uk carries no corner odds, so the only
+benchmark is the base rate. Any claim about corner accuracy should say so.
 
 Any future change must beat these numbers on the same full-history backtest to
-count as an improvement. The previous marks, before xG, were 0.9850 (81%) and
-0.6809 (49%).
+count as an improvement. The marks before xG were 0.9850 (81%) and 0.6809
+(49%); the corners mark before tuning was 0.6878.
 
-Over/under calibration at these settings is within 0.02 in every band holding
-more than 100 matches.
+Over/under goals calibration at these settings is within 0.02 in every band
+holding more than 100 matches.
 
 ## Open questions
 
@@ -137,12 +182,20 @@ more than 100 matches.
   furthest above actual goals in that season (3.27 vs 2.82), so the direction
   fits an xG calibration drift rather than chance — but at 50 matches it is far
   too small to act on. Revisit after a few hundred matches.
+- Corner xi was never swept. It was copied from the goals model and left there.
+  Corners are a more stable team trait than scoring, so a longer memory may
+  suit them better.
 
 ## Next candidates
 
-Tuning is exhausted; the remaining gains are structural.
+Tuning is largely exhausted; the remaining gains are structural.
 
-- Corners model (negative binomial) — the fifth market, currently unbuilt
-- Negative binomial marginals for goals, to handle overdispersion in totals
+- Blend corner strengths with shot volume, the same way goals blend with xG.
+  Shots measure attacking territory with less noise than corner counts, and
+  the goals/xG blend is the one confirmed structural win so far.
+- Negative binomial marginals for goals, to handle overdispersion in totals.
+- Conditioning corners on game state: trailing teams chase and win more
+  corners, so corner counts are tied to the scoreline the goals model already
+  predicts. Currently modelled as independent.
 - Separate decay rates per market, at the cost of the single-scoreline-matrix
-  consistency that currently makes 1X2 and O/U impossible to contradict
+  consistency that currently makes 1X2 and O/U impossible to contradict.
