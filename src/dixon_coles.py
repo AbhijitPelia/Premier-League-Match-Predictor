@@ -8,6 +8,10 @@ Team ratings are shrunk toward league average by a normal prior, so teams with
 little history (newly promoted sides) get sensible ratings instead of extreme
 ones fitted to a handful of matches.
 
+Strengths can be fitted on goals, on expected goals, or on a blend of the two
+(see `blend`). Goals are what actually decide matches but are noisy; xG is a
+steadier measure of how well a team played.
+
 Run from the project root:
     python -m src.dixon_coles
 """
@@ -16,13 +20,15 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
+from scipy.special import gammaln
 from scipy.stats import poisson
 
 from src.clean import load_matches
 
-MAX_GOALS = 10          # scoreline matrix covers 0-0 up to 10-10
-DEFAULT_XI = 0.0018     # time decay per day; half-life of roughly one season
+MAX_GOALS = 10           # scoreline matrix covers 0-0 up to 10-10
+DEFAULT_XI = 0.0018      # time decay per day; half-life of roughly one season
 DEFAULT_PRIOR_SD = 0.35  # spread of team ratings; smaller means more shrinkage
+DEFAULT_BLEND = 0.0      # weight on xG vs goals; 0 = goals only, 1 = xG only
 
 
 @dataclass
@@ -35,12 +41,22 @@ class DixonColesFit:
     rho: float
     xi: float
     prior_sd: float
+    blend: float
     n_matches: int
     fitted_through: pd.Timestamp
 
     @property
     def teams(self) -> list[str]:
         return sorted(self.attack)
+
+
+def _poisson_logpdf(y, lam):
+    """Poisson log-density, valid for continuous y as well as whole numbers.
+
+    scipy's poisson.logpmf rejects non-integer values, but blended goals/xG
+    targets are continuous. For whole numbers this gives the same answer.
+    """
+    return y * np.log(lam) - lam - gammaln(y + 1)
 
 
 def _tau(home_goals, away_goals, lambda_home, lambda_away, rho):
@@ -68,8 +84,13 @@ def _unpack(params, n_teams):
 
 
 def _neg_log_posterior(params, home_idx, away_idx, home_goals, away_goals,
-                       weights, n_teams, prior_sd):
-    """Weighted negative log-likelihood, plus the shrinkage penalty."""
+                       home_target, away_target, weights, n_teams, prior_sd):
+    """Weighted negative log-likelihood, plus the shrinkage penalty.
+
+    The density is evaluated on the fitted target (goals, xG, or a blend),
+    while the low-score correction is evaluated on actual goals, which is the
+    only place scorelines of exactly 0 and 1 exist.
+    """
     attack, defence, baseline, home_advantage, rho = _unpack(params, n_teams)
 
     lambda_home = np.exp(baseline + attack[home_idx] + defence[away_idx] + home_advantage)
@@ -80,8 +101,8 @@ def _neg_log_posterior(params, home_idx, away_idx, home_goals, away_goals,
 
     log_likelihood = (
         np.log(tau)
-        + poisson.logpmf(home_goals, lambda_home)
-        + poisson.logpmf(away_goals, lambda_away)
+        + _poisson_logpdf(home_target, lambda_home)
+        + _poisson_logpdf(away_target, lambda_away)
     )
 
     # Normal prior on team ratings: the further a rating sits from league
@@ -92,8 +113,30 @@ def _neg_log_posterior(params, home_idx, away_idx, home_goals, away_goals,
     return -np.sum(weights * log_likelihood) + penalty
 
 
+def _targets(matches: pd.DataFrame, blend: float) -> tuple[np.ndarray, np.ndarray]:
+    """Blend goals and xG into the quantity the strengths are fitted on.
+
+    Matches with no xG fall back to goals, so a missing scrape degrades the
+    fit slightly rather than dropping matches entirely.
+    """
+    home_goals = matches["home_goals"].to_numpy(dtype=float)
+    away_goals = matches["away_goals"].to_numpy(dtype=float)
+    if blend == 0:
+        return home_goals, away_goals
+
+    if "home_xg" not in matches.columns:
+        raise ValueError("blend > 0 needs xG: run `python -m src.xg` first")
+
+    home_xg = matches["home_xg"].fillna(matches["home_goals"]).to_numpy(dtype=float)
+    away_xg = matches["away_xg"].fillna(matches["away_goals"]).to_numpy(dtype=float)
+    return (
+        (1 - blend) * home_goals + blend * home_xg,
+        (1 - blend) * away_goals + blend * away_xg,
+    )
+
+
 def fit(matches: pd.DataFrame, xi: float = DEFAULT_XI,
-        prior_sd: float = DEFAULT_PRIOR_SD,
+        prior_sd: float = DEFAULT_PRIOR_SD, blend: float = DEFAULT_BLEND,
         as_of: pd.Timestamp | None = None) -> DixonColesFit:
     """Fit the model on every match played strictly before `as_of`.
 
@@ -113,6 +156,7 @@ def fit(matches: pd.DataFrame, xi: float = DEFAULT_XI,
     away_idx = matches["away_id"].map(index).to_numpy()
     home_goals = matches["home_goals"].to_numpy(dtype=float)
     away_goals = matches["away_goals"].to_numpy(dtype=float)
+    home_target, away_target = _targets(matches, blend)
 
     # Recent matches count for more: weight decays exponentially with age.
     latest = matches["date"].max()
@@ -120,8 +164,8 @@ def fit(matches: pd.DataFrame, xi: float = DEFAULT_XI,
     weights = np.exp(-xi * days_ago)
 
     initial = np.concatenate([
-        np.zeros(n_teams),          # attack
-        np.zeros(n_teams),          # defence
+        np.zeros(n_teams),           # attack
+        np.zeros(n_teams),           # defence
         [np.log(1.35), 0.2, -0.05],  # baseline, home advantage, rho
     ])
     bounds = [(-3, 3)] * (2 * n_teams) + [(-1, 2), (-1, 1), (-0.5, 0.5)]
@@ -129,7 +173,8 @@ def fit(matches: pd.DataFrame, xi: float = DEFAULT_XI,
     result = minimize(
         _neg_log_posterior,
         initial,
-        args=(home_idx, away_idx, home_goals, away_goals, weights, n_teams, prior_sd),
+        args=(home_idx, away_idx, home_goals, away_goals,
+              home_target, away_target, weights, n_teams, prior_sd),
         method="L-BFGS-B",
         bounds=bounds,
         options={"maxiter": 5000},
@@ -147,6 +192,7 @@ def fit(matches: pd.DataFrame, xi: float = DEFAULT_XI,
         rho=float(rho),
         xi=xi,
         prior_sd=prior_sd,
+        blend=blend,
         n_matches=len(matches),
         fitted_through=latest,
     )
@@ -210,7 +256,7 @@ def main() -> None:
 
     print(f"Fitted on {model.n_matches} matches through {model.fitted_through.date()}")
     print(f"Baseline: {model.baseline:.3f}   Home advantage: {model.home_advantage:.3f}   "
-          f"rho: {model.rho:.3f}   prior_sd: {model.prior_sd}\n")
+          f"rho: {model.rho:.3f}   prior_sd: {model.prior_sd}   blend: {model.blend}\n")
 
     # Current-season teams only, strongest attack first.
     current = matches[matches["season"] == matches["season"].max()]
