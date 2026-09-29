@@ -28,7 +28,7 @@ from src.clean import load_matches
 MAX_GOALS = 10           # scoreline matrix covers 0-0 up to 10-10
 DEFAULT_XI = 0.0018      # time decay per day; half-life of roughly one season
 DEFAULT_PRIOR_SD = 0.35  # spread of team ratings; smaller means more shrinkage
-DEFAULT_BLEND = 0.0      # weight on xG vs goals; 0 = goals only, 1 = xG only
+DEFAULT_BLEND = 0.5      # weight on xG vs goals; 0 = goals only, 1 = xG only
 
 
 @dataclass

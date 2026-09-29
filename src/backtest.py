@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from src.clean import load_matches
-from src.dixon_coles import DEFAULT_PRIOR_SD, DEFAULT_XI, fit, predict
+from src.dixon_coles import DEFAULT_BLEND, DEFAULT_PRIOR_SD, DEFAULT_XI, fit, predict
 
 EPSILON = 1e-15  # keeps log loss finite if a model ever says 0%
 
@@ -35,7 +35,7 @@ def strip_overround(odds: np.ndarray) -> np.ndarray:
     return implied / implied.sum(axis=1, keepdims=True)
 
 
-def run_backtest(matches: pd.DataFrame, start_season: str, xi: float, prior_sd: float, refit_days: int) -> pd.DataFrame:
+def run_backtest(matches: pd.DataFrame, start_season: str, xi: float, prior_sd: float, blend: float, refit_days: int) -> pd.DataFrame:
     """Predict every match from `start_season` onward, refitting as we go."""
     matches = matches.sort_values(["date", "match_id"]).reset_index(drop=True)
     test = matches[matches["season"] >= start_season]
@@ -49,7 +49,7 @@ def run_backtest(matches: pd.DataFrame, start_season: str, xi: float, prior_sd: 
         for match in season_matches.itertuples():
             if model is None or match.date >= next_refit:
                 history = matches[matches["date"] < match.date]
-                model = fit(history, xi=xi, prior_sd=prior_sd)
+                model = fit(history, xi=xi, prior_sd=prior_sd, blend=blend)
                 next_refit = match.date + pd.Timedelta(days=refit_days)
 
             probabilities = predict(model, match.home_id, match.away_id)
@@ -142,13 +142,17 @@ def main() -> None:
                         help="first season to predict (default 1920, where O/U odds begin)")
     parser.add_argument("--xi", type=float, default=DEFAULT_XI)
     parser.add_argument("--prior-sd", type=float, default=DEFAULT_PRIOR_SD)
+    parser.add_argument("--blend", type=float, default=DEFAULT_BLEND,
+                        help="weight on xG vs goals, 0 to 1 (default 0)")
     parser.add_argument("--refit-days", type=int, default=7,
                         help="how often to refit, in days (default 7)")
     args = parser.parse_args()
 
     matches = load_matches()
-    print(f"Backtesting from {args.start_season} "f"(xi={args.xi}, prior_sd={args.prior_sd}, refit every {args.refit_days}d)")
-    results = run_backtest(matches, args.start_season, args.xi, args.prior_sd, args.refit_days)
+    print(f"Backtesting from {args.start_season} "f"(xi={args.xi}, prior_sd={args.prior_sd}, blend={args.blend}, "
+          f"refit every {args.refit_days}d)")
+    results = run_backtest(matches, args.start_season, args.xi, args.prior_sd,
+                           args.blend, args.refit_days)
 
     print("\n1X2 log loss (lower is better)")
     print(score_1x2(results).round(4).to_string())
