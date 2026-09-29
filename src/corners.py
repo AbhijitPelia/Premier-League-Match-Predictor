@@ -23,7 +23,7 @@ from src.clean import load_matches
 
 MAX_CORNERS = 30          # per team; totals run to 60
 DEFAULT_XI = 0.0018       # time decay per day — UNTUNED, copied from the goals model
-DEFAULT_PRIOR_SD = 0.25   # UNTUNED starting point; corner ratings vary less than goal ratings
+DEFAULT_PRIOR_SD = 0.10   # UNTUNED starting point; corner ratings vary less than goal ratings
 CORNER_LINES = (9.5, 10.5, 11.5)
 
 
