@@ -2,10 +2,10 @@
 
 ## Conclusion
 
-Both parameters are insensitive across the ranges tested (xi 0.001–0.007,
-prior_sd 0.25–0.50); the apparent xi gain on the short window vanished on the
-full history, so the defaults are retained and further gains must come from
-model structure or better data rather than tuning.
+xi and prior_sd are insensitive across the ranges tested and keep their
+defaults; the blend between goals and xG is the one parameter that produced a
+real, held-out improvement, and is now set to 0.5. Further gains must come from
+model structure rather than tuning.
 
 ## Method
 
@@ -16,11 +16,15 @@ base-rate baseline.
 
 Sweeps were run on 2425 onward (810 matches) for speed, then the best candidate
 was confirmed on the full history from 1920 (2,710 matches), which includes
-seasons never used for tuning.
+seasons never used for tuning. That confirmation step is not optional: it
+killed the xi result below and validated the blend result.
 
-## Sweep: time decay (xi), prior_sd = 0.35
+"Gap captured" throughout is how far the model closes the distance from the
+naive baseline to the closing line.
 
-Short window, 2425–2627, 810 matches.
+## Sweep: time decay (xi), prior_sd = 0.35, blend = 0
+
+Short window, 2425-2627, 810 matches.
 
 | xi     | half-life | 1X2        | O/U 2.5    |
 | ------ | --------- | ---------- | ---------- |
@@ -37,11 +41,12 @@ monotonically as xi rises.
 
 The two markets want opposite things: 1X2 depends on the *difference* between
 team strengths, which moves with form and rewards recency; totals depend on the
-*sum*, which is more stable and is better estimated over a longer window.
+*sum*, which is more stable and is better estimated over a longer window. No
+single xi serves both.
 
-## Sweep: prior_sd (shrinkage), xi = 0.0018
+## Sweep: prior_sd (shrinkage), xi = 0.0018, blend = 0
 
-Short window, 2425–2627, 810 matches.
+Short window, 2425-2627, 810 matches.
 
 | prior_sd | 1X2        | O/U 2.5    |
 | -------- | ---------- | ---------- |
@@ -52,43 +57,92 @@ Short window, 2425–2627, 810 matches.
 A 0.003 spread across a twofold range in shrinkage strength. No meaningful
 effect — this knob is not worth further tuning.
 
-## Confirmation on held-out seasons
+## Confirmation: xi on held-out seasons — REJECTED
 
-Full history, 1920–2627, 2,710 matches. Seasons 1920–2324 were never used for
-tuning.
+Full history, 1920-2627, 2,710 matches.
 
 | xi     | 1X2        | O/U 2.5    |
 | ------ | ---------- | ---------- |
 | 0.0018 | 0.9850     | **0.6809** |
 | 0.0030 | **0.9847** | 0.6822     |
 
-Market 0.9657, baseline 1.0699 (1X2); market 0.6734, baseline 0.6882 (O/U).
-
 The 1X2 gain shrank from 0.0035 to 0.0003 — a tenth of its size on the tuning
 window — while over/under got 0.0013 worse. The short-window improvement was
-noise specific to 2425–2526, not a real property of the model.
+noise specific to 2425-2526, not a real property of the model.
 
-**Defaults retained: xi = 0.0018, prior_sd = 0.35.**
+**xi = 0.0018 and prior_sd = 0.35 retained.**
+
+## Sweep: goals/xG blend, xi = 0.0018, prior_sd = 0.35
+
+Short window, 2425-2627, 810 matches. Strengths are fitted on
+`(1 - blend) * goals + blend * xG`; predictions remain a Poisson distribution
+over whole-number scorelines either way.
+
+| blend | 1X2        | O/U 2.5    |
+| ----- | ---------- | ---------- |
+| 0.0   | 1.0113     | 0.6854     |
+| 0.3   | 1.0091     | 0.6828     |
+| 0.5   | 1.0083     | 0.6820     |
+| 0.7   | **1.0080** | **0.6820** |
+| 1.0   | 1.0086     | 0.6834     |
+
+Both markets improve to a minimum around 0.5-0.7 and turn back up at pure xG —
+the first parameter where 1X2 and over/under agree on the same setting.
+
+Pure xG is worse than a blend in both markets: goals carry finishing-quality
+information that xG discards by construction.
+
+## Confirmation: blend on held-out seasons — ACCEPTED
+
+Full history, 1920-2627, 2,710 matches. Seasons 1920-2324 were never used for
+tuning.
+
+| blend | 1X2        | O/U 2.5    |
+| ----- | ---------- | ---------- |
+| 0.0   | 0.9850     | 0.6809     |
+| 0.5   | **0.9831** | **0.6773** |
+
+Market 0.9657, baseline 1.0699 (1X2); market 0.6734, baseline 0.6882 (O/U).
+
+The gain held, unlike xi. Over/under gains most, which is expected: totals
+depend on the tails of the Poisson fit, where goal noise hurts most.
+
+Chose 0.5 over the marginally better 0.7 (0.9828 on the tuning window, a 0.0003
+difference) because it sits in the flat middle of the curve rather than at its
+edge, so it is less likely to be fitted to this particular window.
+
+**blend = 0.5 adopted as the default.**
 
 ## Baseline performance to beat
 
-Full history, 1920–2627, 2,710 matches, at the retained defaults:
+Full history, 1920-2627, 2,710 matches, at the current defaults
+(xi = 0.0018, prior_sd = 0.35, blend = 0.5):
 
 | Market  | Model  | Market | Baseline | Gap captured |
 | ------- | ------ | ------ | -------- | ------------ |
-| 1X2     | 0.9850 | 0.9657 | 1.0699   | 81%          |
-| O/U 2.5 | 0.6809 | 0.6734 | 0.6882   | 49%          |
+| 1X2     | 0.9831 | 0.9657 | 1.0699   | 83%          |
+| O/U 2.5 | 0.6773 | 0.6734 | 0.6882   | 74%          |
 
-"Gap captured" is how far the model closes the distance from the naive baseline
-to the closing line. Any future change must beat these numbers on the same
-full-history backtest to count as an improvement.
+Any future change must beat these numbers on the same full-history backtest to
+count as an improvement. The previous marks, before xG, were 0.9850 (81%) and
+0.6809 (49%).
+
+Over/under calibration at these settings is within 0.02 in every band holding
+more than 100 matches.
+
+## Open questions
+
+- 2627 gets steadily worse as blend rises (1.0266 at blend 0 through 1.0420 at
+  blend 1.0), and it is the season being predicted live. Understat's xG runs
+  furthest above actual goals in that season (3.27 vs 2.82), so the direction
+  fits an xG calibration drift rather than chance — but at 50 matches it is far
+  too small to act on. Revisit after a few hundred matches.
 
 ## Next candidates
 
 Tuning is exhausted; the remaining gains are structural.
 
-- xG-based strength estimates instead of goals — likely the largest single
-  upgrade, and it should help totals most, which is the weaker market
-- Negative binomial marginals to handle overdispersion in match totals
+- Corners model (negative binomial) — the fifth market, currently unbuilt
+- Negative binomial marginals for goals, to handle overdispersion in totals
 - Separate decay rates per market, at the cost of the single-scoreline-matrix
   consistency that currently makes 1X2 and O/U impossible to contradict
