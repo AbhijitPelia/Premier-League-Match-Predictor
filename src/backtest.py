@@ -14,8 +14,16 @@ import argparse
 import numpy as np
 import pandas as pd
 
+from src import corners
 from src.clean import load_matches
 from src.dixon_coles import DEFAULT_BLEND, DEFAULT_PRIOR_SD, DEFAULT_XI, fit, predict
+
+from src.corners import DEFAULT_PRIOR_SD as CORNER_PRIOR_SD
+from src.corners import DEFAULT_XI as CORNER_XI
+from src.corners import corner_probabilities
+from src.corners import fit as fit_corners
+
+CORNER_LINE = 10.5  # closest line to the league average total
 
 EPSILON = 1e-15  # keeps log loss finite if a model ever says 0%
 
@@ -35,12 +43,16 @@ def strip_overround(odds: np.ndarray) -> np.ndarray:
     return implied / implied.sum(axis=1, keepdims=True)
 
 
-def run_backtest(matches: pd.DataFrame, start_season: str, xi: float, prior_sd: float, blend: float, refit_days: int) -> pd.DataFrame:
+def run_backtest(matches: pd.DataFrame, start_season: str, xi: float,
+                prior_sd: float, blend: float, refit_days: int,
+                corners: bool = False, corner_xi: float = CORNER_XI,
+                corner_prior_sd: float = CORNER_PRIOR_SD) -> pd.DataFrame:
     """Predict every match from `start_season` onward, refitting as we go."""
     matches = matches.sort_values(["date", "match_id"]).reset_index(drop=True)
     test = matches[matches["season"] >= start_season]
 
     model = None
+    corner_model = None
     next_refit = None
     rows = []
 
@@ -50,10 +62,14 @@ def run_backtest(matches: pd.DataFrame, start_season: str, xi: float, prior_sd: 
             if model is None or match.date >= next_refit:
                 history = matches[matches["date"] < match.date]
                 model = fit(history, xi=xi, prior_sd=prior_sd, blend=blend)
+                if corners:
+                    corner_model = fit_corners(history, xi=corner_xi, prior_sd=corner_prior_sd)
                 next_refit = match.date + pd.Timedelta(days=refit_days)
 
             probabilities = predict(model, match.home_id, match.away_id)
             total_goals = match.home_goals + match.away_goals
+            corner_probs = (corner_probabilities(corner_model, match.home_id, match.away_id, lines=(CORNER_LINE,))
+                            if corners else {})
             rows.append({
                 "match_id": match.match_id,
                 "season": match.season,
@@ -71,6 +87,8 @@ def run_backtest(matches: pd.DataFrame, start_season: str, xi: float, prior_sd: 
                 "odds_away": match.odds_away_close,
                 "odds_over25": match.odds_over25_close,
                 "odds_under25": match.odds_under25_close,
+                "over_corners": (match.home_corners + match.away_corners) > CORNER_LINE,
+                "p_over_corners": corner_probs.get(f"over{CORNER_LINE}"),
             })
         print(f" {len(season_matches)} matches")
 
@@ -123,6 +141,28 @@ def score_over_under(results: pd.DataFrame) -> pd.Series:
         "matches": len(usable),
     })
 
+def score_corners(results: pd.DataFrame) -> pd.Series:
+    """Log loss for the model and a naive baseline on over/under corners.
+
+    There is no market column: Football-Data.co.uk carries no corner odds, so
+    the only benchmark is predicting the league base rate every time.
+    """
+    usable = results.dropna(subset=["p_over_corners"])
+    if usable.empty:
+        return pd.Series({"model": np.nan, "baseline": np.nan, "matches": 0})
+
+    went_over = usable["over_corners"].to_numpy()
+    model_over = usable["p_over_corners"].to_numpy()
+    base_over = np.full(len(usable), went_over.mean())
+
+    def picked(p_over):
+        return np.where(went_over, p_over, 1 - p_over)
+
+    return pd.Series({
+        "model": log_loss(picked(model_over)),
+        "baseline": log_loss(picked(base_over)),
+        "matches": len(usable),
+    })
 
 def calibration(probabilities: pd.Series, happened: pd.Series, bins: int = 10) -> pd.DataFrame:
     """Group predictions into bands and compare predicted rate to actual rate."""
@@ -144,21 +184,30 @@ def main() -> None:
     parser.add_argument("--prior-sd", type=float, default=DEFAULT_PRIOR_SD)
     parser.add_argument("--blend", type=float, default=DEFAULT_BLEND,
                         help="weight on xG vs goals, 0 to 1 (default 0)")
+    parser.add_argument("--corners", action="store_true",
+                        help="also fit and score the corners model (slower)")
+    parser.add_argument("--corner-xi", type=float, default=CORNER_XI)
+    parser.add_argument("--corner-prior-sd", type=float, default=CORNER_PRIOR_SD)
     parser.add_argument("--refit-days", type=int, default=7,
                         help="how often to refit, in days (default 7)")
     args = parser.parse_args()
 
     matches = load_matches()
-    print(f"Backtesting from {args.start_season} "f"(xi={args.xi}, prior_sd={args.prior_sd}, blend={args.blend}, "
-          f"refit every {args.refit_days}d)")
-    results = run_backtest(matches, args.start_season, args.xi, args.prior_sd,
-                           args.blend, args.refit_days)
+    print(f"Backtesting from {args.start_season} "f"(xi={args.xi}, prior_sd={args.prior_sd}, blend={args.blend}, "f"refit every {args.refit_days}d)")
+    results = run_backtest(matches, args.start_season, args.xi, args.prior_sd, args.blend, args.refit_days, args.corners, args.corner_xi, args.corner_prior_sd)
 
     print("\n1X2 log loss (lower is better)")
     print(score_1x2(results).round(4).to_string())
 
     print("\nOver/under 2.5 log loss")
     print(score_over_under(results).round(4).to_string())
+
+    if args.corners:
+        print(f"\nOver/under {CORNER_LINE} corners log loss")
+        print(score_corners(results).round(4).to_string())
+
+        print(f"\nCalibration: over {CORNER_LINE} corners")
+        print(calibration(results["p_over_corners"], results["over_corners"]).to_string())
 
     print("\n1X2 log loss by season")
     by_season = results.groupby("season").apply(score_1x2, include_groups=False)
