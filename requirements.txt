@@ -3,4 +3,4 @@ requests
 pytest
 jupyter
 scipy
-soccerdata
+soccerdatapython-dotenv
